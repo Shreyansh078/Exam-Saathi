@@ -24,3 +24,11 @@ After deployment finishes, open your ExamSaathi website, refresh it, and ask: `E
 - Students can choose a subject in Ask AI. The server includes only teacher materials tagged with that subject, reducing cross-subject answers.
 - Set `GEMINI_API_KEY`, `GEMINI_MODEL` (optional), and `TEACHER_PASSWORD` in Render Environment.
 - Render's local filesystem may be ephemeral; use a persistent disk or database for long-term materials/PYQ storage.
+
+
+## Gemini reliability setting
+The server now tries `gemini-3.5-flash-lite` first for routine student questions,
+then falls back to `gemini-3.7-flash` and `gemini-3.8-flash` if the first model
+returns a temporary 503. You can override the order with the `GEMINI_MODELS`
+environment variable in Render. This reduces dependence on a single model but
+cannot guarantee zero interruptions on Google's free API tier.
