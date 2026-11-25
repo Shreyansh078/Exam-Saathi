@@ -13,6 +13,7 @@ const http = require("http"), fs = require("fs"), path = require("path"), crypto
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD || "";
 const PYQ_FILE = path.join(__dirname, "pyqs.json");
+const MATERIAL_FILE = path.join(__dirname, "materials.json");
 const teacherSessions = new Set();
 
 function readPyqs(){
@@ -22,12 +23,17 @@ function readPyqs(){
 function writePyqs(items){
   fs.writeFileSync(PYQ_FILE, JSON.stringify(items, null, 2));
 }
+function readMaterials(){
+  try { return JSON.parse(fs.readFileSync(MATERIAL_FILE, "utf8")); }
+  catch(e){ return []; }
+}
+function writeMaterials(items){ fs.writeFileSync(MATERIAL_FILE, JSON.stringify(items, null, 2)); }
 function readBody(req){
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", chunk => {
       body += chunk;
-      if(body.length > 2_000_000){ reject(new Error("Request too large")); req.destroy(); }
+      if(body.length > 8_000_000){ reject(new Error("Request too large")); req.destroy(); }
     });
     req.on("end", () => {
       try { resolve(JSON.parse(body || "{}")); }
@@ -57,6 +63,44 @@ http.createServer((req, res) => {
   // Public student access: teacher-approved PYQs are shared from the server.
   if(req.method === "GET" && req.url === "/api/pyqs"){
     return send(res, 200, { pyqs: readPyqs() });
+  }
+
+  // Teacher materials: images are read by Gemini and saved as subject-tagged text.
+  if(req.method === "GET" && req.url === "/api/materials"){
+    return send(res, 200, { materials: readMaterials().map(({id,subject,topic,filename,createdAt}) => ({id,subject,topic,filename,createdAt})) });
+  }
+  if(req.method === "POST" && req.url === "/api/materials"){
+    if(!isTeacher(req)) return send(res, 401, {error:"Teacher sign-in required."});
+    readBody(req).then(async ({subject, topic, filename, mimeType, imageData}) => {
+      subject = String(subject || "").trim().slice(0,120);
+      topic = String(topic || "General notes").trim().slice(0,160);
+      filename = String(filename || "notes-image").trim().slice(0,180);
+      mimeType = String(mimeType || "");
+      imageData = String(imageData || "").replace(/^data:[^,]+,/, "");
+      if(!subject || !imageData) return send(res, 400, {error:"Subject and an image are required."});
+      if(!["image/jpeg","image/png","image/webp","image/heic"].includes(mimeType)) return send(res, 400, {error:"Please upload a JPG, PNG, WEBP or HEIC image."});
+      if(imageData.length > 5_500_000) return send(res, 413, {error:"Image is too large. Please choose an image under 4 MB."});
+      if(!GEMINI_API_KEY) return send(res, 503, {error:"Gemini is not configured on the server."});
+      const prompt = "Read this photograph of a teacher's study notes or question paper. Transcribe all legible educational text faithfully. Preserve headings, formulas, numbering and question wording. Do not invent missing words. Return plain text only. Subject: " + subject + ". Topic: " + topic + ".";
+      const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(GEMINI_MODEL) + ":generateContent";
+      const response = await fetch(url, {method:"POST", headers:{"content-type":"application/json","x-goog-api-key":GEMINI_API_KEY}, body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt},{inlineData:{mimeType, data:imageData}}]}],generationConfig:{maxOutputTokens:5000}})});
+      const data = await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error("Gemini image reading (" + response.status + "): " + (data.error?.message || "request failed"));
+      const extractedText = (data.candidates || []).flatMap(c=>c.content?.parts || []).map(p=>p.text || "").join("\n").trim();
+      if(!extractedText) throw new Error("Gemini could not read text from this image. Try a clearer, well-lit photo.");
+      const materials = readMaterials();
+      const item = {id:crypto.randomUUID(),subject,topic,filename,extractedText,createdAt:new Date().toISOString()};
+      materials.unshift(item); writeMaterials(materials);
+      send(res,201,{material:{id:item.id,subject,topic,filename,createdAt:item.createdAt,extractedText}});
+    }).catch(e => send(res, 400, {error:e.message}));
+    return;
+  }
+  if(req.method === "DELETE" && req.url.startsWith("/api/materials/")){
+    if(!isTeacher(req)) return send(res,401,{error:"Teacher sign-in required."});
+    const id = decodeURIComponent(req.url.slice("/api/materials/".length));
+    const items=readMaterials(), next=items.filter(x=>x.id!==id);
+    if(next.length===items.length) return send(res,404,{error:"Material not found."});
+    writeMaterials(next); return send(res,200,{ok:true});
   }
 
   // Teacher sign-in. Set TEACHER_PASSWORD before starting the server.
@@ -110,9 +154,16 @@ http.createServer((req, res) => {
     req.on("data", c => body += c);
     req.on("end", async () => {
       try{
-        const { question, notes } = JSON.parse(body);
+        const { question, notes, subject } = JSON.parse(body);
         if(!question || !String(question).trim()) throw new Error("Please enter a question.");
-        const prompt = (notes ? "Student notes:\n" + notes + "\n\n" : "") + "Question: " + question;
+        const materials = readMaterials();
+        const subjects = [...new Set(materials.map(m=>m.subject))];
+        const qLower = String(question).toLowerCase();
+        const chosenSubject = String(subject || "").trim() || subjects.find(s => qLower.includes(s.toLowerCase())) || "";
+        const relevant = chosenSubject ? materials.filter(m => m.subject.toLowerCase() === chosenSubject.toLowerCase()).slice(0,8) : [];
+        const teacherContext = relevant.map(m => "[" + m.subject + " / " + m.topic + "]\n" + m.extractedText).join("\n\n");
+        const scopedNotes = [teacherContext, notes || ""].filter(Boolean).join("\n\n");
+        const prompt = (chosenSubject ? "The student's selected subject is " + chosenSubject + ". Answer ONLY within this subject. Do not mix notes from other subjects. If the question is outside this subject, ask them to select the correct subject.\n\n" : "Identify the subject from the question. Do not mix unrelated subjects.\n\n") + (scopedNotes ? "Relevant notes for this subject:\n" + scopedNotes + "\n\n" : "") + "Question: " + question;
         if(!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set in Render Environment.");
         const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(GEMINI_MODEL) + ":generateContent";
         const controller = new AbortController();

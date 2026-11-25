@@ -44,6 +44,8 @@
   <!-- Ask AI -->
   <section class="card">
     <div class="head"><h2>Ask AI</h2></div>
+    <label class="f" for="askSubject">Subject (choose one to keep answers subject-specific)</label>
+    <select id="askSubject"><option value="">Auto-detect subject</option></select>
     <input type="text" id="q" placeholder="Ask any doubt, e.g. Difference between 2NF and 3NF">
     <button class="primary" data-act="ask">Ask</button>
     <div class="ans" id="answer"></div>
@@ -80,6 +82,19 @@
       <label class="f" for="teacherQuestion">PYQ question</label>
       <textarea id="teacherQuestion" rows="3" placeholder="Paste or type the previous-year question"></textarea>
       <button class="primary" id="publishPyq">Publish PYQ for students</button>
+      <hr>
+      <h3>Upload notes or question-paper photos</h3>
+      <small>Choose the correct subject and topic. ExamSaathi will read the picture and add its text to that subject's study library.</small>
+      <label class="f" for="materialSubject">Subject</label>
+      <input id="materialSubject" type="text" placeholder="e.g. DBMS">
+      <label class="f" for="materialTopic">Topic / unit</label>
+      <input id="materialTopic" type="text" placeholder="e.g. Normalization (optional)">
+      <label class="f" for="materialFile">Photo of notes or question paper</label>
+      <input id="materialFile" type="file" accept="image/*">
+      <button class="primary" id="uploadMaterial">Upload and read photo</button>
+      <p class="msg" id="materialMsg"></p>
+      <h3>Uploaded study materials</h3>
+      <div id="teacherMaterials"></div>
       <button id="teacherSignOut">Sign out</button>
       <p class="msg" id="teacherMsg2"></p>
       <h3>Your published questions</h3>

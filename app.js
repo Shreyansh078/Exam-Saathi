@@ -393,10 +393,10 @@ function firstTab(sub, topic){
 /* ---------- 8. Ask AI ----------
    Sends your question plus the 3 most relevant notes to /api/ask (server.js).
    If the server or the API key is missing, it shows the closest answers from your notes. */
-function searchNotes(q){
+function searchNotes(q, subject){
   const words = q.toLowerCase().split(/\W+/).filter(w => w.length > 3);
   const hits = [];
-  [custom, LIBRARY].forEach(lib => Object.keys(lib).forEach(sub => Object.keys(lib[sub]).forEach(tp => {
+  [custom, LIBRARY].forEach(lib => Object.keys(lib).filter(sub => !subject || sub.toLowerCase() === subject.toLowerCase()).forEach(sub => Object.keys(lib[sub]).forEach(tp => {
     ["short", "medium", "long"].forEach(kind => (lib[sub][tp][kind] || []).forEach(it => {
       const text = (tp + " " + it.q + " " + it.a).toLowerCase();
       const score = words.filter(w => text.includes(w)).length;
@@ -409,10 +409,12 @@ async function askAI(){
   const q = $("q").value.trim(), box = $("answer");
   if(!q) return;
   box.textContent = "Thinking…";
-  const hits = searchNotes(q);
+  let subject = $("askSubject")?.value || "";
+  let hits = searchNotes(q, subject);
+  if(!subject && hits.length){ subject = hits[0].sub; hits = hits.filter(h => h.sub === subject); }
   try{
     const r = await fetch("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({question: q, notes: hits.map(h => h.q + "\n" + h.a).join("\n\n")})});
+      body: JSON.stringify({question: q, subject, notes: hits.map(h => "[" + h.sub + " / " + h.tp + "]\n" + h.q + "\n" + h.a).join("\n\n")})});
     const data = await r.json();
     if(!r.ok) throw new Error(data.error || "Request failed");
     box.textContent = data.answer;
@@ -492,7 +494,7 @@ function setTeacherMode(on){
   $("teacherLogin").hidden = on;
   $("teacherTools").hidden = !on;
   $("teacherMsg").textContent = "";
-  if(on) renderTeacherPublished();
+  if(on){ renderTeacherPublished(); renderTeacherMaterials(); }
 }
 async function teacherSignIn(){
   const msg = $("teacherMsg");
@@ -553,9 +555,49 @@ function renderTeacherPublished(){
   ).join("") : '<p class="empty">No teacher-uploaded PYQs yet.</p>';
 }
 
+
+let sharedMaterials = [];
+function refreshAskSubjects(){
+  const select = $("askSubject"); if(!select) return;
+  const current = select.value;
+  const names = [...new Set([...Object.keys(LIBRARY||{}), ...Object.keys(custom||{}), ...sharedMaterials.map(m=>m.subject)])].sort();
+  select.innerHTML = '<option value="">Auto-detect subject</option>' + names.map(n=>'<option value="'+escapeHtml(n)+'">'+escapeHtml(n)+'</option>').join("");
+  if(names.includes(current)) select.value=current;
+}
+async function loadTeacherMaterials(){
+  try{ const r=await fetch('/api/materials'); const d=await r.json(); sharedMaterials=Array.isArray(d.materials)?d.materials:[]; }
+  catch(e){ sharedMaterials=[]; }
+  refreshAskSubjects(); renderTeacherMaterials();
+}
+function renderTeacherMaterials(){
+  const box=$("teacherMaterials"); if(!box || !teacherToken) return;
+  box.innerHTML=sharedMaterials.length ? sharedMaterials.map(m=>'<div class="pyq-item"><b>'+escapeHtml(m.subject)+' / '+escapeHtml(m.topic)+'</b><p><small>'+escapeHtml(m.filename)+'</small></p><button class="mini" data-delete-material="'+escapeHtml(m.id)+'">Delete</button></div>').join('') : '<p class="empty">No uploaded study photos yet.</p>';
+}
+async function uploadStudyImage(){
+  const file=$("materialFile").files[0], subject=$("materialSubject").value.trim(), topic=$("materialTopic").value.trim() || 'General notes', msg=$("materialMsg");
+  if(!subject || !file){ msg.textContent='Enter a subject and choose a photo first.'; return; }
+  if(file.size>4*1024*1024){ msg.textContent='Please choose an image under 4 MB.'; return; }
+  if(!['image/jpeg','image/png','image/webp'].includes(file.type)){ msg.textContent='Please use a JPG, PNG or WEBP photo.'; return; }
+  msg.textContent='Uploading photo and reading its text with Gemini…';
+  try{
+    const imageData=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});
+    const r=await fetch('/api/materials',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+teacherToken},body:JSON.stringify({subject,topic,filename:file.name,mimeType:file.type,imageData})});
+    const data=await r.json(); if(!r.ok) throw new Error(data.error||'Upload failed');
+    msg.textContent='Photo read and saved under '+subject+'. Students can now ask questions from these notes.';
+    $("materialFile").value=''; await loadTeacherMaterials();
+  }catch(e){msg.textContent=e.message;}
+}
+async function deleteStudyMaterial(id){
+  if(!confirm('Delete this uploaded study material?')) return;
+  try{const r=await fetch('/api/materials/'+encodeURIComponent(id),{method:'DELETE',headers:{'Authorization':'Bearer '+teacherToken}});const d=await r.json();if(!r.ok)throw new Error(d.error||'Delete failed');await loadTeacherMaterials();}
+  catch(e){$("materialMsg").textContent=e.message;}
+}
+
 if($("teacherSignIn")) $("teacherSignIn").addEventListener("click", teacherSignIn);
 if($("teacherPassword")) $("teacherPassword").addEventListener("keydown", e => { if(e.key === "Enter") teacherSignIn(); });
 if($("publishPyq")) $("publishPyq").addEventListener("click", publishPyq);
+if($("uploadMaterial")) $("uploadMaterial").addEventListener("click", uploadStudyImage);
+if($("teacherMaterials")) $("teacherMaterials").addEventListener("click", e=>{const b=e.target.closest('[data-delete-material]');if(b)deleteStudyMaterial(b.dataset.deleteMaterial);});
 if($("teacherSignOut")) $("teacherSignOut").addEventListener("click", async () => {
   try{ await fetch("/api/teacher/logout", {method:"POST", headers:{"Authorization":"Bearer " + teacherToken}}); }catch(e){}
   teacherToken = "";
@@ -570,3 +612,4 @@ if($("teacherPublished")) $("teacherPublished").addEventListener("click", e => {
 });
 if(teacherToken) setTeacherMode(true);
 loadSharedPyqs();
+loadTeacherMaterials();

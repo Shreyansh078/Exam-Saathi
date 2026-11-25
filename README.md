@@ -16,3 +16,11 @@ After deployment finishes, open your ExamSaathi website, refresh it, and ask: `E
 - Gemini requests are made by the server using the `x-goog-api-key` header. The key is not sent to the browser or placed in the request URL.
 - Gemini is the only live AI provider in this build. If the key is missing or Gemini rejects the request, the app will show matching built-in notes as a fallback.
 - Teacher PYQs are stored in `pyqs.json`. Render's ordinary local filesystem can be ephemeral; use a persistent disk or database if uploaded PYQs must survive restarts/redeploys.
+
+
+## Teacher photo uploads and subject-specific AI
+- Sign in to Teacher Corner, enter a subject and optional topic, then upload a JPG/PNG/WEBP photo (up to 4 MB).
+- Gemini transcribes the photo and saves the extracted text in `materials.json`, tagged with the teacher's subject/topic.
+- Students can choose a subject in Ask AI. The server includes only teacher materials tagged with that subject, reducing cross-subject answers.
+- Set `GEMINI_API_KEY`, `GEMINI_MODEL` (optional), and `TEACHER_PASSWORD` in Render Environment.
+- Render's local filesystem may be ephemeral; use a persistent disk or database for long-term materials/PYQ storage.
