@@ -1,17 +1,18 @@
-# ExamSaathi
+# ExamSaathi — Gemini edition
 
-## Deploy on Render
-1. Upload all files in this folder to the root of a GitHub repository.
-2. In Render, create **New + > Web Service** and connect that repository.
-3. Use Runtime **Node**, Build Command `npm install`, and Start Command `npm start`.
-4. Add environment variable `TEACHER_PASSWORD` with a strong teacher password.
-5. Optionally add `ANTHROPIC_API_KEY` for the AI tutor. Keep this key in Render environment variables only; never put it in browser files or GitHub.
-6. Deploy. Render will provide a public `onrender.com` URL.
+## Update the existing Render deployment
+1. Download this ZIP and extract it.
+2. Upload/replace **all files** in the root of the GitHub repository connected to your Render service. Keep the files at the repository root (not inside an extra nested folder).
+3. Commit the changes to GitHub. If Render Auto-Deploy is enabled, it will deploy automatically. Otherwise open Render → your ExamSaathi service → Manual Deploy → Deploy latest commit.
+4. In Render → ExamSaathi service → Environment, make sure `GEMINI_API_KEY` is present. Do not paste the key into GitHub or any browser file. Save changes.
+5. Optional: set `GEMINI_MODEL` to a model available to your Google AI Studio project. The default in this package is `gemini-3.5-flash-lite`.
+6. Keep `TEACHER_PASSWORD` in Render Environment too. Do not share either secret in screenshots or chat.
 
-The app requires Node 18 or newer. There are no external npm dependencies.
+## Test
+After deployment finishes, open your ExamSaathi website, refresh it, and ask: `Explain DBMS in simple language with an example.` The answer should come from Gemini. If an error appears, copy only the error text; never share the API key.
 
-## Local run
-Set `TEACHER_PASSWORD` and optionally `ANTHROPIC_API_KEY`, then run `npm start` and open http://localhost:3000.
-
-## Important storage note
-Teacher PYQs are stored in `pyqs.json` on the server. A Render service's ordinary local filesystem may be ephemeral, so uploaded PYQs may be lost on redeploy/restart unless persistent storage or a database is configured. Do not treat this starter setup as permanent storage.
+## Technical notes
+- Node.js 18 or newer; no external npm packages required.
+- Gemini requests are made by the server using the `x-goog-api-key` header. The key is not sent to the browser or placed in the request URL.
+- Gemini is the only live AI provider in this build. If the key is missing or Gemini rejects the request, the app will show matching built-in notes as a fallback.
+- Teacher PYQs are stored in `pyqs.json`. Render's ordinary local filesystem can be ephemeral; use a persistent disk or database if uploaded PYQs must survive restarts/redeploys.

@@ -1,17 +1,16 @@
 /* =====================================================================
-   server.js: serves the app and forwards "Ask AI" questions to Claude,
+   server.js: serves the app and forwards "Ask AI" questions to Gemini (or Claude),
    so your API key stays on your computer and never reaches the browser.
    Needs Node 18 or newer. No packages to install.
 
-   Run:  set ANTHROPIC_API_KEY=your_key      (Windows cmd)
-         $env:ANTHROPIC_API_KEY="your_key"   (Windows PowerShell)
-         export ANTHROPIC_API_KEY=your_key   (Mac or Linux)
+   Set GEMINI_API_KEY in your hosting provider environment variables.
+   Optional: set GEMINI_MODEL to a model enabled for your Google AI Studio project.
          node server.js
    Open: http://localhost:3000
    ===================================================================== */
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 
-const KEY = process.env.ANTHROPIC_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD || "";
 const PYQ_FILE = path.join(__dirname, "pyqs.json");
 const teacherSessions = new Set();
@@ -41,7 +40,7 @@ function isTeacher(req){
   const token = (req.headers.authorization || "").replace(/^Bearer\\s+/i, "");
   return !!token && teacherSessions.has(token);
 }
-const MODEL = process.env.MODEL || "claude-haiku-4-5-20251001";     // fast and cheap, good for doubts
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".md": "text/markdown" };
 const SYSTEM = "You are ExamSaathi, a friendly exam tutor for BCA students. " +
   "Answer in simple English, and reply in Hinglish if the student writes in Hinglish. " +
@@ -111,19 +110,34 @@ http.createServer((req, res) => {
     req.on("data", c => body += c);
     req.on("end", async () => {
       try{
-        if(!KEY) throw new Error("ANTHROPIC_API_KEY is not set");
         const { question, notes } = JSON.parse(body);
-        const r = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-api-key": KEY, "anthropic-version": "2023-06-01" },
-          body: JSON.stringify({
-            model: MODEL, max_tokens: 1000, system: SYSTEM,
-            messages: [{ role: "user", content: (notes ? "Student notes:\n" + notes + "\n\n" : "") + "Question: " + question }]
-          })
-        });
-        const data = await r.json();
-        if(!r.ok) throw new Error((data.error && data.error.message) || "API error");
-        send(res, 200, { answer: data.content.map(c => c.text || "").join("") });
+        if(!question || !String(question).trim()) throw new Error("Please enter a question.");
+        const prompt = (notes ? "Student notes:\n" + notes + "\n\n" : "") + "Question: " + question;
+        if(!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set in Render Environment.");
+        const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(GEMINI_MODEL) + ":generateContent";
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 45000);
+        let r;
+        try {
+          r = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
+            signal: controller.signal,
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: SYSTEM }] },
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              generationConfig: { maxOutputTokens: 1000 }
+            })
+          });
+        } finally { clearTimeout(timeout); }
+        const data = await r.json().catch(() => ({}));
+        if(!r.ok) {
+          const detail = data.error && data.error.message ? data.error.message : "Gemini API request failed";
+          throw new Error("Gemini (" + r.status + "): " + detail);
+        }
+        const answer = (data.candidates || []).flatMap(c => c.content && c.content.parts || []).map(p => p.text || "").join("").trim();
+        if(!answer) throw new Error("Gemini returned no text. Check the model and API quota in Google AI Studio.");
+        return send(res, 200, { answer, provider: "Gemini", model: GEMINI_MODEL });
       }catch(e){ send(res, 500, { error: e.message }); }
     });
     return;
@@ -139,5 +153,5 @@ http.createServer((req, res) => {
     res.end(data);
   });
  }).listen(process.env.PORT || 3000, () => console.log("ExamSaathi server started on port " + (process.env.PORT || 3000) +
-  (KEY ? "" : "  (no API key set: Ask AI will use notes only)") +
+  (GEMINI_API_KEY ? "  (Gemini AI enabled: " + GEMINI_MODEL + ")" : "  (no Gemini key set: Ask AI will use notes only)") +
   (TEACHER_PASSWORD ? "  (teacher uploads enabled)" : "  (set TEACHER_PASSWORD to enable teacher uploads)")));
